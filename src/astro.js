@@ -1,0 +1,128 @@
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url)
+const { Origin, Horoscope } = require('circular-natal-horoscope-js')
+
+const PLANETS = ['sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto']
+
+// Planet significance order for sorting when orbs are tied
+const PLANET_WEIGHT = { sun: 0, moon: 1, mercury: 2, venus: 3, mars: 4, jupiter: 5, saturn: 6, uranus: 7, neptune: 8, pluto: 9 }
+
+const ASPECT_ANGLES = { conjunction: 0, opposition: 180, trine: 120, square: 90, sextile: 60 }
+const ASPECT_ORBS   = { conjunction: 8, opposition: 8, trine: 8, square: 7, sextile: 6 }
+
+const MOON_PHASES = [
+    { key: 'nouvelle',         label: 'Nouvelle Lune',             emoji: '🌑', min: 0,   max: 45  },
+    { key: 'croissant',        label: 'Premier Croissant',         emoji: '🌒', min: 45,  max: 90  },
+    { key: 'premier-quartier', label: 'Premier Quartier',          emoji: '🌓', min: 90,  max: 135 },
+    { key: 'gibbeuse-crois',   label: 'Lune Gibbeuse Croissante',  emoji: '🌔', min: 135, max: 180 },
+    { key: 'pleine',           label: 'Pleine Lune',               emoji: '🌕', min: 180, max: 225 },
+    { key: 'gibbeuse-decr',    label: 'Lune Gibbeuse Décroissante',emoji: '🌖', min: 225, max: 270 },
+    { key: 'dernier-quartier', label: 'Dernier Quartier',          emoji: '🌗', min: 270, max: 315 },
+    { key: 'decroissant',      label: 'Dernier Croissant',         emoji: '🌘', min: 315, max: 360 },
+]
+
+function buildOrigin(year, month, day, hour, minute, lat, lon) {
+    // Origin uses 0-indexed months (January = 0)
+    return new Origin({ year, month: month - 1, date: day, hour, minute, second: 0, latitude: lat, longitude: lon })
+}
+
+function buildHoroscope(origin, houseSystem = 'placidus') {
+    try {
+        return new Horoscope({ origin, houseSystem, zodiac: 'tropical', aspectPoints: ['bodies'], aspectWithPoints: ['bodies'], aspectTypes: ['major'] })
+    } catch {
+        // Placidus is undefined at high latitudes — fall back to whole-sign
+        if (houseSystem !== 'whole-sign') return buildHoroscope(origin, 'whole-sign')
+        throw new Error('Impossible de calculer les maisons pour cette position géographique.')
+    }
+}
+
+function extractPlanets(horoscope) {
+    const bodies = horoscope.CelestialBodies
+    const map = new Map()
+    for (const key of PLANETS) {
+        const body = bodies[key]
+        if (!body) continue
+        map.set(key, {
+            key,
+            signKey: body.Sign.key,
+            eclipticDeg: body.ChartPosition.Ecliptic.DecimalDegrees,
+            houseId: body.House?.id ?? null,
+            isRetrograde: body.isRetrograde ?? false,
+        })
+    }
+    return map
+}
+
+function angularDiff(deg1, deg2) {
+    const diff = Math.abs(deg1 - deg2) % 360
+    return diff > 180 ? 360 - diff : diff
+}
+
+function computeTransitAspects(transitPlanets, natalPlanets) {
+    const aspects = []
+    for (const [tKey, tPlanet] of transitPlanets) {
+        for (const [nKey, nPlanet] of natalPlanets) {
+            const diff = angularDiff(tPlanet.eclipticDeg, nPlanet.eclipticDeg)
+            for (const [aspectKey, angle] of Object.entries(ASPECT_ANGLES)) {
+                const orb = Math.abs(diff - angle)
+                if (orb <= ASPECT_ORBS[aspectKey]) {
+                    aspects.push({ transitPlanetKey: tKey, natalPlanetKey: nKey, aspectKey, orb })
+                }
+            }
+        }
+    }
+    // Sort by orb (tightest first), then by planet significance
+    aspects.sort((a, b) => {
+        if (Math.abs(a.orb - b.orb) > 0.01) return a.orb - b.orb
+        return (PLANET_WEIGHT[a.transitPlanetKey] ?? 9) - (PLANET_WEIGHT[b.transitPlanetKey] ?? 9)
+    })
+    // Limit to 8 most significant aspects
+    return aspects.slice(0, 8)
+}
+
+function computeMoonPhase(sunDeg, moonDeg) {
+    const diff = ((moonDeg - sunDeg) % 360 + 360) % 360
+    const phase = MOON_PHASES.find(p => diff >= p.min && diff < p.max) ?? MOON_PHASES[0]
+    const illumination = (1 - Math.cos((diff * Math.PI) / 180)) / 2
+    return { ...phase, illumination: Math.round(illumination * 100) / 100 }
+}
+
+export function computeChart({ birthYear, birthMonth, birthDay, birthHour, birthMinute, birthLat, birthLon, birthTimeUnknown }) {
+    const hour   = birthHour   ?? 12
+    const minute = birthMinute ?? 0
+
+    const natalOrigin = buildOrigin(birthYear, birthMonth, birthDay, hour, minute, birthLat, birthLon)
+    const natalChart  = buildHoroscope(natalOrigin)
+
+    const now = new Date()
+    const transitOrigin = buildOrigin(
+        now.getFullYear(), now.getMonth() + 1, now.getDate(),
+        now.getHours(), now.getMinutes(), birthLat, birthLon
+    )
+    const transitChart = buildHoroscope(transitOrigin)
+
+    const natalPlanets   = extractPlanets(natalChart)
+    const transitPlanets = extractPlanets(transitChart)
+
+    const ascendant = {
+        signKey:    natalChart.Ascendant.Sign.key,
+        eclipticDeg: natalChart.Ascendant.ChartPosition.Ecliptic.DecimalDegrees,
+    }
+    const midheaven = {
+        signKey:    natalChart.Midheaven.Sign.key,
+        eclipticDeg: natalChart.Midheaven.ChartPosition.Ecliptic.DecimalDegrees,
+    }
+
+    const aspects   = computeTransitAspects(transitPlanets, natalPlanets)
+    const transitSun  = transitPlanets.get('sun')
+    const transitMoon = transitPlanets.get('moon')
+    const moonPhase = computeMoonPhase(transitSun.eclipticDeg, transitMoon.eclipticDeg)
+
+    return {
+        natal: { planets: natalPlanets, ascendant, midheaven, birthTimeUnknown: !!birthTimeUnknown },
+        transits: { planets: transitPlanets, date: now },
+        aspects,
+        moonPhase,
+        moonSignKey: transitMoon.signKey,
+    }
+}
