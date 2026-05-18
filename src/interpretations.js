@@ -37,6 +37,16 @@ const ASPECTS_FR = {
         tonalite: 'opportunite',
         phrase: (tNom, nDomaine) => `${tNom} ouvre ${nDomaine}`,
     },
+    quincunx: {
+        nom: 'Quinconce',
+        tonalite: 'tension',
+        phrase: (tNom, nDomaine) => `${tNom} demande un ajustement autour de ${nDomaine}`,
+    },
+    semisquare: {
+        nom: 'Demi-carré',
+        tonalite: 'friction',
+        phrase: (tNom, nDomaine) => `${tNom} crée une légère friction avec ${nDomaine}`,
+    },
 }
 
 const SIGNS_FR = {
@@ -90,9 +100,8 @@ function formatDeg(deg) {
 }
 
 export function buildInterpretation(astroResult, prenom) {
-    const { natal, transits, aspects, moonPhase, moonSignKey } = astroResult
+    const { natal, transits, aspects, natalAspects, transitAspects, moonPhase, moonSignKey, moonVoC } = astroResult
 
-    // Build natal section
     const natalSection = {
         planetes: [],
         ascendant: null,
@@ -141,8 +150,7 @@ export function buildInterpretation(astroResult, prenom) {
         maison: lune?.houseId ?? null,
     }
 
-    // Build transit interpretations
-    const transitSection = aspects.map(({ transitPlanetKey, natalPlanetKey, aspectKey, orb }) => {
+    const transitSection = aspects.map(({ transitPlanetKey, natalPlanetKey, aspectKey, orb, applying }) => {
         const tPlanet  = PLANETS_FR[transitPlanetKey]
         const nPlanet  = PLANETS_FR[natalPlanetKey]
         const aspectFr = ASPECTS_FR[aspectKey]
@@ -168,11 +176,52 @@ export function buildInterpretation(astroResult, prenom) {
             emojiNatale:      nPlanet.emoji,
             orbe:             Math.round(orb * 100) / 100,
             retrograde:       tPlanetData?.isRetrograde ?? false,
+            appliquant:       applying,
             interpretation,
         }
     }).filter(Boolean)
 
-    // Moon section
+    const aspectsNatauxSection = natalAspects.map(({ planet1Key, planet2Key, aspectKey, orb }) => {
+        const p1 = PLANETS_FR[planet1Key]
+        const p2 = PLANETS_FR[planet2Key]
+        const aspectFr = ASPECTS_FR[aspectKey]
+        if (!p1 || !p2 || !aspectFr) return null
+        return {
+            planete1: p1.nom,
+            planete1Cle: planet1Key,
+            planete2: p2.nom,
+            planete2Cle: planet2Key,
+            aspect: aspectKey,
+            aspectNom: aspectFr.nom,
+            tonalite: aspectFr.tonalite,
+            orbe: Math.round(orb * 100) / 100,
+        }
+    }).filter(Boolean)
+
+    const aspectsTransitsSection = transitAspects.map(({ planet1Key, planet2Key, aspectKey, orb, applying }) => {
+        const p1 = PLANETS_FR[planet1Key]
+        const p2 = PLANETS_FR[planet2Key]
+        const aspectFr = ASPECTS_FR[aspectKey]
+        const p1Data = transits.planets.get(planet1Key)
+        const p2Data = transits.planets.get(planet2Key)
+        const s1 = SIGNS_FR[p1Data?.signKey]
+        const s2 = SIGNS_FR[p2Data?.signKey]
+        if (!p1 || !p2 || !aspectFr || !s1 || !s2) return null
+        return {
+            planete1: p1.nom,
+            planete1Cle: planet1Key,
+            signe1: s1.nom,
+            planete2: p2.nom,
+            planete2Cle: planet2Key,
+            signe2: s2.nom,
+            aspect: aspectKey,
+            aspectNom: aspectFr.nom,
+            tonalite: aspectFr.tonalite,
+            orbe: Math.round(orb * 100) / 100,
+            appliquant: applying,
+        }
+    }).filter(Boolean)
+
     const moonSign = SIGNS_FR[moonSignKey]
     const luneSection = {
         phase:          moonPhase.label,
@@ -182,18 +231,26 @@ export function buildInterpretation(astroResult, prenom) {
         signe:          moonSign?.nom ?? moonSignKey,
         signeKey:       moonSignKey,
         interpretation: MOON_PHASE_INTERPRETATIONS[moonPhase.key] ?? '',
+        videOfCourse:   moonVoC,
     }
 
-    // Synthesis: dominant tonalite from 3 tightest aspects
     const top3 = transitSection.slice(0, 3)
     const tonalites = top3.map(t => t.tonalite)
     const dominant = tonalites.sort((a, b) =>
         tonalites.filter(t => t === b).length - tonalites.filter(t => t === a).length
     )[0] ?? 'harmonie'
-    const planetesList = [...new Set(top3.map(t => t.planeteTrans))].join(', ')
+    let planetesList = [...new Set(top3.map(t => t.planeteTrans))]
+    planetesList = `${planetesList.slice(0, planetesList.length - 1).join(', ')} et ${planetesList.slice(-1)}`
     const synthese = (TONALITE_SYNTHESIS[dominant] ?? TONALITE_SYNTHESIS.harmonie)(planetesList || 'les astres')
 
-    return { natal: natalSection, transits: transitSection, lune: luneSection, synthese }
+    return {
+        natal: natalSection,
+        transits: transitSection,
+        aspectsNataux: aspectsNatauxSection,
+        aspectsTransits: aspectsTransitsSection,
+        lune: luneSection,
+        synthese,
+    }
 }
 
 export { SIGNS_FR, PLANETS_FR }

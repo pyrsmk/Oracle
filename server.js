@@ -1,11 +1,13 @@
 import 'dotenv/config'
 import express from 'express'
+import { createHash } from 'crypto'
+import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
 import { geocodeCity, GeocodingError } from './src/geocode.js'
 import { computeChart } from './src/astro.js'
 import { buildInterpretation } from './src/interpretations.js'
-import { enrichWithGemini, isRateLimit, getRetryDelay } from './src/gemini.js'
+import { enrich, isRateLimit, getRetryDelay } from './src/ai.js'
 
 const port = 9999
 const app = express()
@@ -13,7 +15,27 @@ app.use(express.json())
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-app.get('/', (req, res) => res.sendFile(`${__dirname}/index.html`))
+function fileHash(path) {
+    return createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 8)
+}
+
+const faviconHash = fileHash(`${__dirname}/public/favicon.svg`)
+const cssHash     = fileHash(`${__dirname}/public/style.css`)
+const jsHash      = fileHash(`${__dirname}/public/script.js`)
+
+const { version } = JSON.parse(readFileSync(`${__dirname}/package.json`, 'utf8'))
+
+const indexHtml = readFileSync(`${__dirname}/index.html`, 'utf8')
+    .replace('<title>L\'Oracle Céleste</title>', `<title>L'Oracle Céleste v${version}</title>`)
+    .replace('href="favicon.svg"', `href="favicon.svg?v=${faviconHash}"`)
+    .replace('href="style.css"', `href="style.css?v=${cssHash}"`)
+    .replace('src="script.js"', `src="script.js?v=${jsHash}"`)
+
+app.get('/', (req, res) => res.type('html').send(indexHtml))
+app.get('/favicon.svg', (req, res) => res.sendFile(`${__dirname}/public/favicon.svg`))
+app.get('/icons.svg', (req, res) => res.sendFile(`${__dirname}/public/icons.svg`))
+app.get('/style.css',   (req, res) => res.sendFile(`${__dirname}/public/style.css`))
+app.get('/script.js',   (req, res) => res.sendFile(`${__dirname}/public/script.js`))
 
 app.post('/api/horoscope', async (req, res) => {
     const { prenom, dateNaissance, heureNaissance, lieuNaissance } = req.body
@@ -38,9 +60,9 @@ app.post('/api/horoscope', async (req, res) => {
             try {
                 const birthData = { prenom, dateNaissance, heureNaissance, lieuNaissance }
                 const cacheKey = `${prenom}:${dateNaissance}:${lieuNaissance}`
-                response.oracle = await enrichWithGemini(response, birthData, cacheKey)
+                response.oracle = await enrich(response, birthData, cacheKey)
             } catch (err) {
-                console.error('Gemini oracle failed:', err.message, JSON.stringify({ status: err.status, errorDetails: err.errorDetails }, null, 2))
+                console.error('Oracle failed:', err.message, JSON.stringify({ status: err.status, errorDetails: err.errorDetails }, null, 2))
                 response.oracleError = isRateLimit(err) ? 'rate_limit' : 'error'
                 if (isRateLimit(err)) response.oracleRetryDelay = getRetryDelay(err)
             }
@@ -81,10 +103,10 @@ app.post('/api/oracle', async (req, res) => {
 
         const birthData = { prenom, dateNaissance, heureNaissance, lieuNaissance }
         const cacheKey = `${prenom}:${dateNaissance}:${lieuNaissance}`
-        const oracle = await enrichWithGemini(interpretation, birthData, cacheKey)
+        const oracle = await enrich(interpretation, birthData, cacheKey)
         res.json({ oracle })
     } catch (err) {
-        console.error('Gemini oracle retry failed:', err)
+        console.error('Oracle retry failed:', err)
         const oracleError = isRateLimit(err) ? 'rate_limit' : 'error'
         const oracleRetryDelay = isRateLimit(err) ? getRetryDelay(err) : null
         res.json({ oracleError, ...(oracleRetryDelay && { oracleRetryDelay }) })

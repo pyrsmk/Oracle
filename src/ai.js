@@ -10,7 +10,7 @@ function todayKey() {
 }
 
 function buildPrompt(interpretation, birthData) {
-    const { natal, transits, lune } = interpretation
+    const { natal, transits, aspectsNataux, aspectsTransits, lune } = interpretation
     const { prenom, dateNaissance, heureNaissance, lieuNaissance } = birthData
 
     const heure = heureNaissance ?? 'inconnue'
@@ -20,19 +20,37 @@ function buildPrompt(interpretation, birthData) {
         return `  - ${p.nom} : ${p.signe} ${p.degres}, maison ${p.maison}${retro}`
     }).join('\n')
 
+    const natalAspectLines = aspectsNataux.map(a =>
+        `  - ${a.planete1} ${a.aspectNom} ${a.planete2} (orbe ${a.orbe}°, ${a.tonalite})`
+    ).join('\n')
+
     const transitLines = transits.map(t => {
         const retro = t.retrograde ? ' (rétrograde)' : ''
-        return `  - ${t.planeteTrans} en ${t.signeTrans}${retro} ${t.aspectNom} ${t.planeteNatale} natal (orbe ${t.orbe}°, ${t.tonalite})`
+        const dynamique = t.appliquant ? "[s'applique]" : '[se sépare]'
+        return `  - ${t.planeteTrans} en ${t.signeTrans}${retro} ${t.aspectNom} ${t.planeteNatale} natal (orbe ${t.orbe}°, ${t.tonalite}) ${dynamique}`
     }).join('\n')
+
+    const transitTransitLines = aspectsTransits.map(a => {
+        const dynamique = a.appliquant ? "[s'applique]" : '[se sépare]'
+        return `  - ${a.planete1} en ${a.signe1} ${a.aspectNom} ${a.planete2} en ${a.signe2} (orbe ${a.orbe}°, ${a.tonalite}) ${dynamique}`
+    }).join('\n')
+
+    const luneStatut = lune.videOfCourse
+        ? '\nStatut : Lune Vide de Cours (aucun aspect exact avant le changement de signe)'
+        : ''
 
     return `Tu es un astrologue expert. Voici le thème astral complet de ${prenom}. \
 Rédige une interprétation claire et accessible en français, en 4 à 6 phrases, en prenant \
-en compte l'âge de la personne. \
-Ton objectif : que quelqu'un qui ne connaît rien à l'astrologie comprenne concrètement \
-ce que cette journée représente pour lui/elle — quelles énergies sont à l'œuvre, \
-quels défis ou opportunités se présentent, et comment les aborder. \
+en compte l'âge de la personne. Tu vouvoieras la personne ${prenom}. \
+Ton objectif : décrire avec justesse les nuances de cette journée pour une personne qui vit \
+une vie ordinaire. Si les aspects sont légers ou séparants, l'interprétation doit l'être aussi \
+— quelques tendances subtiles, une légère coloration émotionnelle, un contexte favorable ou \
+légèrement frictionnant. Réserve les formulations fortes (défis majeurs, opportunités \
+décisives, tournants de vie) aux configurations vraiment intenses. Pas de dramatisation par \
+défaut. Les aspects qui s'appliquent sont plus actifs que ceux qui se séparent ; un orbe \
+serré (< 1°) est plus fort qu'un orbe large — calibre ton interprétation en conséquence. \
 Pas de jargon technique non expliqué. Pas de style littéraire. \
-Sois direct, précis et utile. \
+Sois précis, calibré et utile. \
 Réponds uniquement avec le texte, sans titre, sans guillemets.
 
 IDENTITÉ
@@ -46,11 +64,17 @@ Ascendant : ${natal.ascendant.signe} ${natal.ascendant.degres}
 Planètes :
 ${planeteLines}
 
+ASPECTS NATAUX (configuration de base)
+${natalAspectLines || '  - Aucun aspect significatif'}
+
 TRANSITS ACTIFS AUJOURD'HUI (${todayKey()})
-${transitLines}
+${transitLines || '  - Aucun transit significatif'}
+
+ÉNERGIE GÉNÉRALE DU JOUR (aspects entre planètes actuelles)
+${transitTransitLines || '  - Aucun aspect significatif'}
 
 LUNE DU JOUR
-Phase : ${lune.phase} en ${lune.signe} — ${Math.round(lune.illumination * 100)}% d'illumination`
+Phase : ${lune.phase} en ${lune.signe} — ${Math.round(lune.illumination * 100)}% d'illumination${luneStatut}`
 }
 
 export function isRateLimit(err) {
@@ -68,7 +92,7 @@ async function callGemini(model, prompt) {
     return result.response.text().trim()
 }
 
-export async function enrichWithGemini(interpretation, birthData, cacheKey) {
+export async function enrich(interpretation, birthData, cacheKey) {
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) throw new Error('GEMINI_API_KEY non définie')
 
